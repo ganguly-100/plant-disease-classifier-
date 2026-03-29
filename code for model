@@ -1,0 +1,162 @@
+# ================================================================
+# 🌿 PlantAID: Lightweight Plant Disease Detection Model
+# ================================================================
+# Optimized MobileNetV2 (α=0.5) + small LSTM head
+# ================================================================
+
+import tensorflow as tf
+from tensorflow.keras.applications import MobileNetV2
+from tensorflow.keras.models import Model, load_model
+from tensorflow.keras.layers import GlobalAveragePooling2D, Reshape, LSTM, Dropout, Dense
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+
+# ================================================================
+# 1️⃣ Configuration
+# ================================================================
+IMG_SIZE = 128
+BATCH_SIZE = 32
+EPOCHS = 10
+
+DATASET_PATH = "/kaggle/input/five-crop-diseases-dataset/Crop Diseases Dataset/Crop Diseases/Crop___Disease"
+
+# ================================================================
+# 2️⃣ Data Preprocessing (with automatic split)
+# ================================================================
+train_datagen = ImageDataGenerator(
+    rescale=1./255,
+    rotation_range=25,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    shear_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    fill_mode='nearest',
+    validation_split=0.2  # 80% train / 20% validation
+)
+
+train_generator = train_datagen.flow_from_directory(
+    DATASET_PATH,
+    target_size=(IMG_SIZE, IMG_SIZE),
+    batch_size=BATCH_SIZE,
+    class_mode='categorical',
+    subset='training',
+    shuffle=True
+)
+
+valid_generator = train_datagen.flow_from_directory(
+    DATASET_PATH,
+    target_size=(IMG_SIZE, IMG_SIZE),
+    batch_size=BATCH_SIZE,
+    class_mode='categorical',
+    subset='validation',
+    shuffle=False
+)
+
+num_classes = len(train_generator.class_indices)
+print("✅ Number of Classes:", num_classes)
+print("✅ Class Mapping:", train_generator.class_indices)
+
+# ================================================================
+# 3️⃣ Build Optimized Model (MobileNetV2 + LSTM)
+# ================================================================
+base_model = MobileNetV2(
+    input_shape=(IMG_SIZE, IMG_SIZE, 3),
+    include_top=False,
+    weights='imagenet',
+    alpha=0.5   # 👈 lighter version (half the filters)
+)
+
+base_model.trainable = False  # freeze base model
+
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+x = Reshape((1, -1))(x)
+
+x = LSTM(64, return_sequences=True)(x)
+x = Dropout(0.4)(x)
+x = LSTM(32)(x)
+x = Dropout(0.4)(x)
+x = Dense(64, activation='relu')(x)
+x = Dropout(0.4)(x)
+preds = Dense(num_classes, activation='softmax')(x)
+
+model = Model(inputs=base_model.input, outputs=preds)
+
+# ================================================================
+# 4️⃣ Compile Model
+# ================================================================
+model.compile(
+    optimizer=Adam(1e-4),
+    loss='categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+# ================================================================
+# 5️⃣ Train Model
+# ================================================================
+history = model.fit(
+    train_generator,
+    validation_data=valid_generator,
+    epochs=EPOCHS,
+    verbose=1
+)
+
+# ================================================================
+# 6️⃣ Evaluate Model
+# ================================================================
+val_loss, val_acc = model.evaluate(valid_generator)
+print(f"\n✅ Validation Accuracy: {val_acc*100:.2f}%")
+
+# ================================================================
+# 7️⃣ Plot Accuracy and Loss
+# ================================================================
+plt.figure(figsize=(12,5))
+
+plt.subplot(1,2,1)
+plt.plot(history.history['accuracy'], label='Train Acc')
+plt.plot(history.history['val_accuracy'], label='Val Acc')
+plt.title('Model Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.subplot(1,2,2)
+plt.plot(history.history['loss'], label='Train Loss')
+plt.plot(history.history['val_loss'], label='Val Loss')
+plt.title('Model Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+
+plt.show()
+
+# ================================================================
+# 8️⃣ Fine-Tune Top Layers (Optional for +Accuracy)
+# ================================================================
+# Unfreeze last 10 layers of base_model
+for layer in base_model.layers[-10:]:
+    layer.trainable = True
+
+model.compile(optimizer=Adam(1e-5), loss='categorical_crossentropy', metrics=['accuracy'])
+fine_tune_history = model.fit(train_generator, validation_data=valid_generator, epochs=5)
+
+# ================================================================
+# 9️⃣ Save Model and Weights
+# ================================================================
+os.makedirs("models", exist_ok=True)
+model.save("models/plantAID_lightweight_model.keras")
+model.save_weights("models/plantAID_lightweight_weights.h5")
+print("💾 Model and Weights saved successfully!")
+
+# ================================================================
+# 🔁 10️⃣ Reload & Test
+# ================================================================
+loaded_model = load_model("models/plantAID_lightweight_model.keras")
+val_loss, val_acc = loaded_model.evaluate(valid_generator)
+print(f"🔁 Reloaded Model Accuracy: {val_acc*100:.2f}%")
